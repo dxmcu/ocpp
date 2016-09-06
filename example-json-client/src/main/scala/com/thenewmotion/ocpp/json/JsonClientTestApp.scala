@@ -14,7 +14,7 @@ object JsonClientTestApp extends App {
 
   private val logger = LoggerFactory.getLogger(JsonClientTestApp.getClass)
 
-  val connection = new OcppJsonClient(chargerId, new URI(centralSystemUri)) {
+  val connection = new OcppJsonClient(chargerId, new URI(centralSystemUri), false) {
 
     def onRequest(req: ChargePointReq): Future[ChargePointRes] = Future {
       req match {

@@ -4,11 +4,18 @@ import java.net.URI
 import com.thenewmotion.ocpp.messages._
 import scala.concurrent.Future
 
-abstract class OcppJsonClient(chargerId: String, centralSystemUri: URI)
+abstract class OcppJsonClient(chargerId: String, centralSystemUri: URI, messageEncryption: Boolean)
   extends OcppEndpoint[CentralSystemReq, CentralSystemRes, ChargePointReq, ChargePointRes] {
 
   private[this] val ocppStack = new ChargePointOcppConnectionComponent with DefaultSrpcComponent with SimpleClientWebSocketComponent {
-    val webSocketConnection = new SimpleClientWebSocketConnection(chargerId, centralSystemUri)
+    val webSocketConnection = new SimpleClientWebSocketConnection(
+      chargerId,
+      centralSystemUri,
+      if (messageEncryption)
+        Some(new OcppMessageEncryptor(chargerId))
+      else
+        None
+    )
     val srpcConnection = new DefaultSrpcConnection
     val ocppConnection = new ChargePointOcppConnection
 

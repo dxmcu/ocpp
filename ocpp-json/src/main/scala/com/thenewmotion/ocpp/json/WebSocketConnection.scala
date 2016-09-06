@@ -7,6 +7,8 @@ import org.json4s.native.Serialization
 import org.slf4j.LoggerFactory
 import org.java_websocket.client.WebSocketClient
 import java.net.URI
+import java.nio.ByteBuffer
+
 import scala.collection.JavaConverters._
 
 trait WebSocketComponent {
@@ -67,14 +69,23 @@ class DummyWebSocketComponent extends WebSocketComponent {
 trait SimpleClientWebSocketComponent extends WebSocketComponent {
 
   private val ocppProtocol = "ocpp1.5"
+  private val aesExtension = "aesencrypt;CPID="
 
-  class SimpleClientWebSocketConnection(chargerId: String, uri: URI) extends WebSocketConnection {
+  class SimpleClientWebSocketConnection(
+    chargerId: String,
+    uri: URI,
+    ocppMessageEncryptorOpt: Option[OcppMessageEncryptor]
+  ) extends WebSocketConnection {
 
     private[this] val logger = LoggerFactory.getLogger(SimpleClientWebSocketConnection.this.getClass)
 
     private val actualUri = uriWithChargerId(uri, chargerId)
 
-    private val headers = Map("Sec-WebSocket-Protocol" -> ocppProtocol).asJava
+    private val headers = (Map(
+      "Sec-WebSocket-Protocol" -> ocppProtocol) ++
+      ocppMessageEncryptorOpt.map(_ =>
+        Map("Sec-WebSocket-Extensions" -> s"$aesExtension$chargerId")
+      ).getOrElse(Map.empty)).asJava
 
     private val client = new WebSocketClient(actualUri, new Draft_17(), headers, 0) {
 
@@ -89,6 +100,14 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
             logger.debug("Received JSON message {}", jval)
             SimpleClientWebSocketComponent.this.onMessage(jval)
         }
+      }
+
+      override def onMessage(bytes: ByteBuffer) {
+        logger.debug("Received binary message {}", bytes)
+        onMessage(ocppMessageEncryptorOpt.fold(
+          new String(bytes.array(), "UTF-8")) { encryptor =>
+          encryptor.decrypt(bytes.array())
+        })
       }
 
       override def onError(e: Exception) = {
@@ -108,7 +127,14 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
 
     def send(jval: JValue) = {
       logger.debug("Sending with Java-WebSocket: {}", jval)
-      client.send(native.compactJson(native.renderJValue(jval)))
+
+      val compactedJson = native.compactJson(native.renderJValue(jval))
+      ocppMessageEncryptorOpt match {
+        case Some(ocppMessageEncryptor) =>
+          client.send(ocppMessageEncryptor.encrypt(compactedJson))
+        case None =>
+          client.send(compactedJson)
+      }
     }
 
     def close() = client.closeBlocking()
