@@ -92,24 +92,27 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
       override def onOpen(h: ServerHandshake): Unit =
         logger.debug("WebSocket connection opened to {}", actualUri)
 
+      private def handleTextMessage(msg: String): Unit =
+        native.parseJsonOpt(msg) match {
+          case None =>
+            logger.debug("Received non-JSON message: {}", msg)
+          case Some(jVal) =>
+            logger.debug("Received JSON message {}", jVal)
+            SimpleClientWebSocketComponent.this.onMessage(jVal)
+        }
+
       override def onMessage(msg: String): Unit = {
         if (aesEncryptorOpt.isDefined)
           logger.warn("Encryption enabled: ignoring text message {}", msg)
         else
-          native.parseJsonOpt(msg) match {
-            case None =>
-              logger.debug("Received non-JSON message: {}", msg)
-            case Some(jval) =>
-              logger.debug("Received JSON message {}", jval)
-              SimpleClientWebSocketComponent.this.onMessage(jval)
-          }
+          handleTextMessage(msg)
       }
 
       override def onMessage(bytes: ByteBuffer) {
         aesEncryptorOpt.fold(
           logger.warn("Encryption not enabled: ignoring binary message")) { aesEncryptor =>
           logger.debug("Received binary message {}", bytes)
-          onMessage(aesEncryptor.decrypt(bytes.array()))
+          handleTextMessage(aesEncryptor.decrypt(bytes.array()))
         }
       }
 
