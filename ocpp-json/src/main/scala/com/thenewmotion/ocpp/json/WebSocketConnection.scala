@@ -94,7 +94,7 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
 
       override def onMessage(msg: String): Unit = {
         if (aesEncryptorOpt.isDefined)
-          logger.warn("Encryption enabled: ignoring text message")
+          logger.warn("Encryption enabled: ignoring text message {}", msg)
         else
           native.parseJsonOpt(msg) match {
             case None =>
