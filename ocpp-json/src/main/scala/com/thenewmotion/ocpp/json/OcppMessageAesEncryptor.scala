@@ -9,10 +9,10 @@ import javax.crypto.spec.SecretKeySpec
 import org.apache.commons.codec.digest.DigestUtils
 import org.slf4j.LoggerFactory
 
-object OcppMessageEncryptor {
+object OcppMessageAesEncryptor {
   // encryption
   private final val BlockAlgorithm = "AES"
-  private final val BlockMethod = "AES/CBC/NoPadding"
+  private final val BlockMethod = "AES/CBC/NoPadding" // we do our own padding (saving bytes)
   private final val BlockCipher = Cipher.getInstance(BlockMethod)
   private final val RandomBytes = new SecureRandom()
   private final val SharedKey = "eNovates00000000"
@@ -22,16 +22,17 @@ object OcppMessageEncryptor {
   private final val KeyedHash = Mac.getInstance(HashAlgorithm)
 }
 
-class OcppMessageEncryptor(val serial: String) {
+// TODO: implement the suggestions in TNM-3236
+class OcppMessageAesEncryptor(val serial: String) {
 
-  import OcppMessageEncryptor._
+  import OcppMessageAesEncryptor._
 
-  private[this] val logger = LoggerFactory.getLogger(OcppMessageEncryptor.this.getClass)
+  private[this] val logger = LoggerFactory.getLogger(OcppMessageAesEncryptor.this.getClass)
 
   KeyedHash.init(new SecretKeySpec(serialToEncryptKey, HashAlgorithm))
 
   private def logBytes(name: String, bytes: Array[Byte]) = {
-    logger.info(s"\n$name: ${bytes.map(_.toInt).mkString(",")}")
+    logger.debug(s"\n$name: ${bytes.map(_.toInt).mkString(",")}")
   }
 
   private lazy val serialToEncryptKey: Array[Byte] = {
@@ -42,24 +43,6 @@ class OcppMessageEncryptor(val serial: String) {
       .take(BlockCipher.getBlockSize)
     logBytes("encryptKey", encryptKey)
     encryptKey
-  }
-
-  private def addHash(msg: Array[Byte]): Array[Byte] = {
-    val hash = KeyedHash.doFinal(msg)
-    logBytes("hash", hash)
-    val addedHash = hash ++ msg
-    logBytes("message", addedHash)
-    addedHash
-  }
-
-  private def removeHash(msg: Array[Byte]): Array[Byte] = {
-    val (hash, message) = msg.splitAt(KeyedHash.getMacLength)
-    logBytes("hash", hash)
-    logBytes("message", message)
-    if (!addHash(message).take(KeyedHash.getMacLength).sameElements(hash)) {
-      throw new IllegalArgumentException("Invalid hash")
-    }
-    message
   }
 
   private def encryptBytes(msg: Array[Byte]): Array[Byte] = {
@@ -73,7 +56,7 @@ class OcppMessageEncryptor(val serial: String) {
       if (remainder == 0) 0
       else 16 - remainder
 
-    logger.info(s"\npadding: $padding")
+    logger.debug(s"\npadding: $padding")
 
     val encrypted = BlockCipher.doFinal(
       msg.padTo(msg.length + padding, ' '.toByte))
@@ -97,17 +80,30 @@ class OcppMessageEncryptor(val serial: String) {
     decrypted
   }
 
+  private def addHash(msg: Array[Byte]): Array[Byte] = {
+    val hash = KeyedHash.doFinal(msg)
+    logBytes("addHash -> hash", hash)
+    val addedHash = hash ++ msg
+    addedHash
+  }
+
   def encrypt(msg: String): Array[Byte] = {
     val IvBytes = new Array[Byte](BlockCipher.getBlockSize)
     RandomBytes.nextBytes(IvBytes)
-    val encrypting: Array[Byte] = IvBytes ++ msg.getBytes("UTF8")
-    logBytes("encrypting", encrypting)
-    addHash(encryptBytes(encrypting))
+    val data: Array[Byte] = IvBytes ++ msg.getBytes("UTF8")
+    logBytes("encrypt -> data", data)
+    addHash(encryptBytes(data))
   }
 
   def decrypt(msg: Array[Byte]): String = {
-    logBytes("decrypting", msg)
-    decryptBytes(removeHash(msg))
+    val (hash, data) = msg.splitAt(KeyedHash.getMacLength)
+    logBytes("decrypt -> hash", hash)
+    logBytes("decrypt -> data", data)
+    if (!addHash(data).take(KeyedHash.getMacLength).sameElements(hash)) {
+      throw new IllegalArgumentException("decrypt: authentication error")
+    }
+
+    decryptBytes(data)
       .drop(BlockCipher.getBlockSize)
       .map(_.toChar).mkString
   }

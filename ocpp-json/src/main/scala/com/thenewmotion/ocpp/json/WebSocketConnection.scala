@@ -74,7 +74,7 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
   class SimpleClientWebSocketConnection(
     chargerId: String,
     uri: URI,
-    ocppMessageEncryptorOpt: Option[OcppMessageEncryptor]
+    aesEncryptorOpt: Option[OcppMessageAesEncryptor]
   ) extends WebSocketConnection {
 
     private[this] val logger = LoggerFactory.getLogger(SimpleClientWebSocketConnection.this.getClass)
@@ -83,7 +83,7 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
 
     private val headers = (Map(
       "Sec-WebSocket-Protocol" -> ocppProtocol) ++
-      ocppMessageEncryptorOpt.map(_ =>
+      aesEncryptorOpt.map(_ =>
         Map("Sec-WebSocket-Extensions" -> s"$aesExtension$chargerId")
       ).getOrElse(Map.empty)).asJava
 
@@ -93,21 +93,24 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
         logger.debug("WebSocket connection opened to {}", actualUri)
 
       override def onMessage(msg: String): Unit = {
-        native.parseJsonOpt(msg) match {
-          case None =>
-            logger.debug("Received non-JSON message: {}", msg)
-          case Some(jval) =>
-            logger.debug("Received JSON message {}", jval)
-            SimpleClientWebSocketComponent.this.onMessage(jval)
-        }
+        if (aesEncryptorOpt.isDefined)
+          logger.warn("Encryption enabled: ignoring text message")
+        else
+          native.parseJsonOpt(msg) match {
+            case None =>
+              logger.debug("Received non-JSON message: {}", msg)
+            case Some(jval) =>
+              logger.debug("Received JSON message {}", jval)
+              SimpleClientWebSocketComponent.this.onMessage(jval)
+          }
       }
 
       override def onMessage(bytes: ByteBuffer) {
-        logger.debug("Received binary message {}", bytes)
-        onMessage(ocppMessageEncryptorOpt.fold(
-          new String(bytes.array(), "UTF-8")) { encryptor =>
-          encryptor.decrypt(bytes.array())
-        })
+        aesEncryptorOpt.fold(
+          logger.warn("Encryption not enabled: ignoring binary message")) { aesEncryptor =>
+          logger.debug("Received binary message {}", bytes)
+          onMessage(aesEncryptor.decrypt(bytes.array()))
+        }
       }
 
       override def onError(e: Exception) = {
@@ -129,9 +132,9 @@ trait SimpleClientWebSocketComponent extends WebSocketComponent {
       logger.debug("Sending with Java-WebSocket: {}", jval)
 
       val compactedJson = native.compactJson(native.renderJValue(jval))
-      ocppMessageEncryptorOpt match {
-        case Some(ocppMessageEncryptor) =>
-          client.send(ocppMessageEncryptor.encrypt(compactedJson))
+      aesEncryptorOpt match {
+        case Some(aesEncryptor) =>
+          client.send(aesEncryptor.encrypt(compactedJson))
         case None =>
           client.send(compactedJson)
       }
